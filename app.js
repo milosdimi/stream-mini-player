@@ -1,5 +1,5 @@
-// app.js (final, online-ready - proxy only for playlists / manifests)
-const PROXY = "https://player.dimit.cc/proxy.php?url=";
+// app.js (final, online-ready)
+const PROXY = `${new URL("proxy.php", window.location.href).href}?url=`;
 
 
 const LAST_M3U_KEY = "iptv_last_m3u_v1";
@@ -208,8 +208,9 @@ function renderList(items) {
     div.dataset.index = String(idx);
 
     const starred = isFav(it);
-    const logoHtml = it.logo
-      ? `<img class="logo" src="${escapeAttr(it.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer"
+    const logoUrl = proxifyIfNeeded(it.logo || "", "image");
+    const logoHtml = logoUrl
+      ? `<img class="logo" src="${escapeAttr(logoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer"
            onerror="this.style.display='none'">`
       : "";
 
@@ -287,13 +288,19 @@ function stopPlayback() {
   videoEl.load();
 }
 
-// IMPORTANT: proxy only for playlist & manifest, NOT for video segments
-function proxifyIfNeeded(url) {
-  // Proxy only for text playlists/manifests (CORS), not for media segments
-  if (/\.(m3u8|m3u)(\?|$)/i.test(url)) {
-    return PROXY + encodeURIComponent(url);
+function proxifyIfNeeded(url, kind = "stream") {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+
+  const isManifest = /\.(m3u8|m3u)(\?|$)/i.test(raw);
+  const isHttp = /^http:\/\//i.test(raw);
+
+  // Force proxy for manifests and insecure http resources on https pages.
+  if (isManifest || (location.protocol === "https:" && isHttp)) {
+    return PROXY + encodeURIComponent(raw);
   }
-  return url;
+
+  return raw;
 }
 
 function playItem(item) {
@@ -307,12 +314,12 @@ function playItem(item) {
 
   if (hls) { hls.destroy(); hls = null; }
 
-  const url = item.url; // ✅ DIRECT, kein Proxy
-
+  const url = String(item.url || "").trim();
+  const playUrl = proxifyIfNeeded(url, "stream");
   if (url.toLowerCase().includes(".m3u8")) {
     if (window.Hls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hls.loadSource(url);
+      hls.loadSource(playUrl);
       hls.attachMedia(videoEl);
       hls.on(Hls.Events.ERROR, (_, data) => {
         showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
@@ -322,7 +329,7 @@ function playItem(item) {
     }
   }
 
-  videoEl.src = url;
+  videoEl.src = playUrl;
   videoEl.play().catch(err => showError(`Playback failed.\n${String(err)}`));
 }
 
@@ -350,7 +357,10 @@ async function loadM3U(url) {
     // Playlist always via proxy (CORS)
     const finalUrl = PROXY + encodeURIComponent(url);
     const res = await fetch(finalUrl, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}${errText ? `: ${errText}` : ""}`);
+    }
 
     const text = await res.text();
     allParsedItems = parseM3U(text);
@@ -455,3 +465,4 @@ if (m3uUrlEl && last) m3uUrlEl.value = last;
 
 if (last) loadM3U(last);
 else loadDemo();
+

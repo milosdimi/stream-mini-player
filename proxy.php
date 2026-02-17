@@ -16,6 +16,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
   exit;
 }
 
+function starts_with(string $haystack, string $needle): bool {
+  if ($needle === '') return true;
+  return substr($haystack, 0, strlen($needle)) === $needle;
+}
+
 $url = $_GET['url'] ?? '';
 $url = trim($url);
 
@@ -52,6 +57,10 @@ if (filter_var($host, FILTER_VALIDATE_IP)) {
 }
 
 function curl_fetch(string $url): array {
+  if (!function_exists('curl_init')) {
+    return ['ok' => false, 'status' => 500, 'headers' => [], 'body' => 'cURL extension is not enabled on this server'];
+  }
+
   $ch = curl_init($url);
 
   $headers = [
@@ -115,7 +124,8 @@ function is_m3u8(string $url, array $headers): bool {
 function proxy_url(string $absUrl): string {
   $self = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
   $host = $_SERVER['HTTP_HOST'] ?? '';
-  return $self . '://' . $host . '/proxy.php?url=' . rawurlencode($absUrl);
+  $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/proxy.php';
+  return $self . '://' . $host . $scriptPath . '?url=' . rawurlencode($absUrl);
 }
 
 function absolutize(string $line, string $baseUrl): string {
@@ -128,7 +138,7 @@ function absolutize(string $line, string $baseUrl): string {
   $port = isset($b['port']) ? ':' . $b['port'] : '';
 
   // Root-relative
-  if (str_starts_with($line, '/')) {
+  if (starts_with($line, '/')) {
     return $scheme . '://' . $host . $port . $line;
   }
 
@@ -167,7 +177,7 @@ if (is_m3u8($url, $headers)) {
     }
 
     // Normal comments / empty lines
-    if ($trim === '' || str_starts_with($trim, '#')) {
+    if ($trim === '' || starts_with($trim, '#')) {
       $out[] = $trim;
       continue;
     }
