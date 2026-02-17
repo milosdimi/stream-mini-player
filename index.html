@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="de">
+
+<head>
+  <!-- Basic -->
+  <meta charset="utf-8" />
+  <meta http-equiv="x-ua-compatible" content="ie=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Mini IPTV Player</title>
+  <meta name="description"
+    content="Mini IPTV Player – schneller Web-Player für M3U(HLS), Senderliste, Favoriten und Suche." />
+  <meta name="keywords" content="IPTV, M3U, HLS, Player, Web Player, Live TV, Movies, Series" />
+  <meta name="author" content="Milos Dimitrijevic" />
+  <meta name="robots" content="noindex, nofollow" />
+
+  <!-- Theme / PWA-ish -->
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Mini IPTV" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <!-- Favicon / Icons -->
+  <link rel="icon" href="img/streaming-tv-app.png" type="image/png" />
+  <link rel="apple-touch-icon" href="img/streaming-tv-app.png" />
+  <link rel="shortcut icon" href="img/streaming-tv-app.png" />
+
+  <!-- Social (safe defaults for local/dev) -->
+  <meta property="og:title" content="Mini IPTV Player" />
+  <meta property="og:description" content="Schneller Web-Player für M3U(HLS) mit Favoriten, Tabs und Suche." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="img/streaming-tv-app.png" />
+
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Mini IPTV Player" />
+  <meta name="twitter:description" content="Schneller Web-Player für M3U(HLS) mit Favoriten, Tabs und Suche." />
+  <meta name="twitter:image" content="img/streaming-tv-app.png" />
+
+  <!-- Performance -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="dns-prefetch" href="//cdn.jsdelivr.net" />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body>
+  <header>
+    <input id="m3uUrl" placeholder="M3U URL einfügen (HLS empfohlen)" autocomplete="off" spellcheck="false" />
+    <button id="loadBtn" type="button">Load</button>
+
+    <div id="loading" class="loading" style="display:none;" aria-live="polite" aria-busy="true">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Loading playlist…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="toolbar">
+        <div class="tabs" role="tablist" aria-label="Content type">
+          <button id="tabLive" class="tab active" type="button" role="tab" aria-selected="true">LIVE</button>
+          <button id="tabMovies" class="tab" type="button" role="tab" aria-selected="false">MOVIES</button>
+          <button id="tabSeries" class="tab" type="button" role="tab" aria-selected="false">SERIES</button>
+          <button id="tabFav" class="tab" type="button" role="tab" aria-selected="false">★</button>
+        </div>
+
+        <select id="groupSelect" class="select" aria-label="Group filter">
+          <option value="">All groups</option>
+        </select>
+
+        <input id="search" placeholder="Search (name/group)..." autocomplete="off" spellcheck="false" />
+        <button id="demoBtn" type="button" title="Load a small demo list">Demo</button>
+      </div>
+
+      <div class="hint">
+        Tasten: ↑ ↓ · Enter play · Backspace stop · S favorite · F fullscreen
+      </div>
+
+      <div id="list" class="list" role="list"></div>
+      <div id="error" class="err" style="display:none;" role="alert"></div>
+    </section>
+
+    <section class="player" aria-label="Player">
+      <div class="hint" id="nowPlaying">Nichts läuft…</div>
+      <video id="video" controls playsinline controlsList="nodownload"></video>
+    </section>
+  </main>
+
+  <footer class="footer" role="contentinfo">
+    <div class="footer__inner">
+      <div class="footer__title">Mini IPTV Player</div>
+
+      <p class="footer__text">
+        This application does not provide any TV channels, playlists, or streaming content.
+        Users must provide their own playlist URL(s). The developer is not responsible for the
+        content accessed through third-party sources.
+      </p>
+
+      <p class="footer__text footer__muted">
+        For personal/demo use. If you are a rights holder and believe content is being accessed illegally,
+        please contact the relevant content provider/host.
+      </p>
+    </div>
+  </footer>
+
+  <!-- HLS.js for .m3u8 streams -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="./app.js"></script>
+</body>
+
+</html>
