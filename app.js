@@ -1,5 +1,6 @@
 // app.js (final, clean - no EPG)
-const PROXY = "http://localhost:3000/m3u?url=";
+const PROXY = "https://player.dimit.cc/proxy.php?url=";
+
 const LAST_M3U_KEY = "iptv_last_m3u_v1";
 
 // Elements
