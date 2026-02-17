@@ -1,5 +1,6 @@
 // app.js (final, online-ready - proxy only for playlists / manifests)
-const PROXY = "https://player.dimit.cc/proxy.php?url=";
+const url = item.url; // KEIN Proxy für Playback
+
 
 const LAST_M3U_KEY = "iptv_last_m3u_v1";
 const FAV_KEY = "iptv_favs_v1";
@@ -62,7 +63,7 @@ function setLoading(isLoading, text = "Loading…") {
 
 // ---------- Last playlist ----------
 function saveLastM3U(url) {
-  try { localStorage.setItem(LAST_M3U_KEY, url || ""); } catch {}
+  try { localStorage.setItem(LAST_M3U_KEY, url || ""); } catch { }
 }
 function loadLastM3U() {
   try { return localStorage.getItem(LAST_M3U_KEY) || ""; } catch { return ""; }
@@ -78,7 +79,7 @@ function loadFavs() {
   }
 }
 function saveFavs() {
-  try { localStorage.setItem(FAV_KEY, JSON.stringify([...favSet])); } catch {}
+  try { localStorage.setItem(FAV_KEY, JSON.stringify([...favSet])); } catch { }
 }
 function favId(item) {
   return item?.url || "";
@@ -297,38 +298,44 @@ function proxifyIfNeeded(url) {
 
 function playItem(item) {
   clearError();
-  if (!item || !videoEl) return;
+  if (!item) return;
 
   currentPlayingId = favId(item);
   filterAndRender();
 
-  if (nowPlayingEl) nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
-
-  if (hls) { hls.destroy(); hls = null; }
-
-  const rawUrl = item.url;
-  const isM3U8 = /\.(m3u8)(\?|$)/i.test(rawUrl);
-
-  if (isM3U8 && window.Hls && Hls.isSupported()) {
-    hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-
-    // Only manifest proxied
-    const manifestUrl = proxifyIfNeeded(rawUrl);
-    hls.loadSource(manifestUrl);
-    hls.attachMedia(videoEl);
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
-    });
-
-    videoEl.play().catch(() => {});
-    return;
+  if (nowPlayingEl) {
+    nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
   }
 
-  // fallback (mp4, etc.) — try direct first, proxy only if it's a playlist
-  videoEl.src = proxifyIfNeeded(rawUrl);
-  videoEl.play().catch(err => showError(`Playback failed.\n${String(err)}`));
+  if (hls) {
+    hls.destroy();
+    hls = null;
+  }
+
+  const url = item.url; // 🔥 DIRECT STREAM URL
+
+  if (url.includes(".m3u8")) {
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+      });
+      hls.loadSource(url);
+      hls.attachMedia(videoEl);
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        showError(`HLS error: ${data.type} / ${data.details}`);
+      });
+      videoEl.play().catch(() => { });
+      return;
+    }
+  }
+
+  videoEl.src = url;
+  videoEl.play().catch(err =>
+    showError(`Playback failed.\n${String(err)}`)
+  );
 }
+
 
 // ---------- Utils ----------
 function escapeHtml(s) {
