@@ -295,6 +295,11 @@ function proxifyIfNeeded(url, kind = "stream") {
   const isManifest = /\.(m3u8|m3u)(\?|$)/i.test(raw);
   const isHttp = /^http:\/\//i.test(raw);
 
+  // Logos are optional: skip insecure http images on https pages to avoid noisy failed requests.
+  if (kind === "image" && location.protocol === "https:" && isHttp) {
+    return "";
+  }
+
   // Force proxy for manifests and insecure http resources on https pages.
   if (isManifest || (location.protocol === "https:" && isHttp)) {
     return PROXY + encodeURIComponent(raw);
@@ -322,7 +327,9 @@ function playItem(item) {
       hls.loadSource(playUrl);
       hls.attachMedia(videoEl);
       hls.on(Hls.Events.ERROR, (_, data) => {
-        showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
+        const responseText = data?.networkDetails?.responseText || "";
+        const msg = `HLS error: ${data.type} / ${data.details}\n${data.reason || responseText || ""}`.trim();
+        showError(msg);
       });
       videoEl.play().catch(() => { });
       return;

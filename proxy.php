@@ -1,173 +1,166 @@
 <?php
-// proxy.php - simple HLS-friendly proxy (personal/dev use)
-// - Proxies any http/https URL
-// - Rewrites .m3u8 so segments/keys also go through this proxy
-// - Adds CORS headers so browser + hls.js can fetch
-
-declare(strict_types=1);
+// proxy.php - low-memory streaming proxy (cPanel/PHP5+ compatible)
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Headers: *');
 header('Access-Control-Allow-Methods: GET, HEAD, OPTIONS');
-header('Access-Control-Expose-Headers: Content-Type, Content-Length, Accept-Ranges, Content-Range');
+header('Access-Control-Expose-Headers: Content-Type, Content-Length, Accept-Ranges, Content-Range, X-Proxy-Error');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-  http_response_code(204);
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+  send_status(204);
   exit;
 }
 
-function starts_with(string $haystack, string $needle): bool {
+function send_status($code) {
+  $code = (int)$code;
+  if (function_exists('http_response_code')) {
+    http_response_code($code);
+    return;
+  }
+  header('X-PHP-Response-Code: ' . $code, true, $code);
+}
+
+function starts_with($haystack, $needle) {
+  $haystack = (string)$haystack;
+  $needle = (string)$needle;
   if ($needle === '') return true;
   return substr($haystack, 0, strlen($needle)) === $needle;
 }
 
-$url = $_GET['url'] ?? '';
-$url = trim($url);
-
-if (!$url) {
-  http_response_code(400);
-  echo "Missing ?url=";
-  exit;
+function arr_get($arr, $key, $default) {
+  return (is_array($arr) && array_key_exists($key, $arr)) ? $arr[$key] : $default;
 }
 
-if (!preg_match('~^https?://~i', $url)) {
-  http_response_code(400);
-  echo "Only http/https allowed";
-  exit;
-}
-
-// Basic SSRF guard: block localhost/private ranges
-$parts = parse_url($url);
-$host = $parts['host'] ?? '';
-if (!$host) {
-  http_response_code(400);
-  echo "Invalid URL";
-  exit;
-}
-
-// If host is an IP, block private ranges
-if (filter_var($host, FILTER_VALIDATE_IP)) {
-  if (
-    preg_match('~^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)~', $host)
-  ) {
-    http_response_code(403);
-    echo "Blocked host";
-    exit;
+function deny($status, $msg) {
+  $safe = preg_replace('~[\r\n]+~', ' ', (string)$msg);
+  if ($safe !== '') {
+    header('X-Proxy-Error: ' . substr($safe, 0, 220));
   }
+  send_status($status);
+  header('Content-Type: text/plain; charset=utf-8');
+  echo $msg;
+  exit;
 }
 
-function curl_fetch(string $url): array {
+function proxy_url($absUrl) {
+  $https = isset($_SERVER['HTTPS']) ? $_SERVER['HTTPS'] : '';
+  $self = ($https && $https !== 'off') ? 'https' : 'http';
+  $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '';
+  $scriptPath = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/proxy.php';
+  return $self . '://' . $host . $scriptPath . '?url=' . rawurlencode($absUrl);
+}
+
+function absolutize($line, $baseUrl) {
+  if (preg_match('~^https?://~i', $line)) return $line;
+
+  $b = parse_url($baseUrl);
+  $scheme = arr_get($b, 'scheme', 'http');
+  $host = arr_get($b, 'host', '');
+  $port = isset($b['port']) ? ':' . $b['port'] : '';
+
+  if (starts_with($line, '/')) {
+    return $scheme . '://' . $host . $port . $line;
+  }
+
+  $dir = preg_replace('~[^/]+$~', '', $baseUrl);
+  return $dir . $line;
+}
+
+function should_rewrite_manifest($url) {
+  return preg_match('~\.m3u8(\?|$)~i', $url) === 1;
+}
+
+function make_curl($url) {
   if (!function_exists('curl_init')) {
-    return ['ok' => false, 'status' => 500, 'headers' => [], 'body' => 'cURL extension is not enabled on this server'];
+    return null;
   }
 
   $ch = curl_init($url);
+  if (!$ch) return null;
 
-  $headers = [
+  $headers = array(
     'User-Agent: Mozilla/5.0',
     'Accept: */*',
     'Connection: keep-alive',
-  ];
-
-  // Forward Range for TS segments (helps seeking / smoother playback)
+  );
   if (!empty($_SERVER['HTTP_RANGE'])) {
     $headers[] = 'Range: ' . $_SERVER['HTTP_RANGE'];
   }
 
-  curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_FOLLOWLOCATION => true,
-    CURLOPT_MAXREDIRS => 5,
-    CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_TIMEOUT => 25,
-    CURLOPT_HTTPHEADER => $headers,
-    CURLOPT_HEADER => true,
-    CURLOPT_SSL_VERIFYPEER => false, // some IPTV hosts have broken TLS
-    CURLOPT_SSL_VERIFYHOST => 0,
-  ]);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+  curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+  curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+  curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+  curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+  curl_setopt($ch, CURLOPT_BUFFERSIZE, 65536);
+  if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+    curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+  }
+  if (defined('CURLOPT_HTTP_VERSION') && defined('CURL_HTTP_VERSION_1_1')) {
+    curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+  }
+
+  return $ch;
+}
+
+function fetch_manifest_buffered($url) {
+  $ch = make_curl($url);
+  if (!$ch) {
+    return array('ok' => false, 'status' => 500, 'headers' => array(), 'body' => 'cURL extension is not enabled on this server');
+  }
+
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($ch, CURLOPT_HEADER, true);
 
   $resp = curl_exec($ch);
   if ($resp === false) {
     $err = curl_error($ch);
     curl_close($ch);
-    return ['ok' => false, 'status' => 502, 'headers' => [], 'body' => $err];
+    return array('ok' => false, 'status' => 502, 'headers' => array(), 'body' => $err);
   }
 
-  $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-  $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+  $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $headerSize = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
   curl_close($ch);
 
   $rawHeaders = substr($resp, 0, $headerSize);
   $body = substr($resp, $headerSize);
 
-  $outHeaders = [];
-  foreach (explode("\r\n", $rawHeaders) as $line) {
+  $outHeaders = array();
+  $lines = explode("\r\n", $rawHeaders);
+  foreach ($lines as $line) {
     $pos = strpos($line, ':');
     if ($pos !== false) {
       $k = strtolower(trim(substr($line, 0, $pos)));
       $v = trim(substr($line, $pos + 1));
-      if ($k) $outHeaders[$k] = $v;
+      if ($k !== '') $outHeaders[$k] = $v;
     }
   }
 
-  return ['ok' => true, 'status' => $status, 'headers' => $outHeaders, 'body' => $body];
+  return array('ok' => true, 'status' => $status, 'headers' => $outHeaders, 'body' => $body);
 }
 
-function is_m3u8(string $url, array $headers): bool {
-  if (preg_match('~\.m3u8(\?|$)~i', $url)) return true;
-  $ct = strtolower($headers['content-type'] ?? '');
-  return (strpos($ct, 'application/vnd.apple.mpegurl') !== false) ||
-         (strpos($ct, 'application/x-mpegurl') !== false) ||
-         (strpos($ct, 'audio/mpegurl') !== false);
-}
+function rewrite_manifest_and_send($url) {
+  $resp = fetch_manifest_buffered($url);
+  send_status(arr_get($resp, 'status', 500));
 
-function proxy_url(string $absUrl): string {
-  $self = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-  $host = $_SERVER['HTTP_HOST'] ?? '';
-  $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/proxy.php';
-  return $self . '://' . $host . $scriptPath . '?url=' . rawurlencode($absUrl);
-}
-
-function absolutize(string $line, string $baseUrl): string {
-  // Already absolute
-  if (preg_match('~^https?://~i', $line)) return $line;
-
-  $b = parse_url($baseUrl);
-  $scheme = $b['scheme'] ?? 'http';
-  $host = $b['host'] ?? '';
-  $port = isset($b['port']) ? ':' . $b['port'] : '';
-
-  // Root-relative
-  if (starts_with($line, '/')) {
-    return $scheme . '://' . $host . $port . $line;
+  if (!arr_get($resp, 'ok', false)) {
+    header('Content-Type: text/plain; charset=utf-8');
+    echo arr_get($resp, 'body', 'Proxy request failed');
+    exit;
   }
 
-  // Relative
-  $dir = preg_replace('~[^/]+$~', '', $baseUrl); // strip file part
-  return $dir . $line;
-}
+  $headers = arr_get($resp, 'headers', array());
+  $body = (string)arr_get($resp, 'body', '');
 
-$resp = curl_fetch($url);
-http_response_code($resp['status']);
-
-if (!$resp['ok']) {
-  header('Content-Type: text/plain; charset=utf-8');
-  echo $resp['body'];
-  exit;
-}
-
-$headers = $resp['headers'];
-$body = $resp['body'];
-
-if (is_m3u8($url, $headers)) {
-  // Rewrite playlist so every segment/key goes through proxy
   $lines = preg_split("~\r?\n~", $body);
-  $out = [];
+  $out = array();
 
   foreach ($lines as $line) {
     $trim = trim($line);
 
-    // Rewrite EXT-X-KEY URI="..."
     if (stripos($trim, '#EXT-X-KEY:') === 0 && preg_match('~URI="([^"]+)"~i', $trim, $m)) {
       $keyUrlAbs = absolutize($m[1], $url);
       $proxied = proxy_url($keyUrlAbs);
@@ -176,29 +169,99 @@ if (is_m3u8($url, $headers)) {
       continue;
     }
 
-    // Normal comments / empty lines
     if ($trim === '' || starts_with($trim, '#')) {
       $out[] = $trim;
       continue;
     }
 
-    // Segment/variant URI
     $abs = absolutize($trim, $url);
     $out[] = proxy_url($abs);
   }
 
   header('Content-Type: application/vnd.apple.mpegurl; charset=utf-8');
+  if (isset($headers['cache-control'])) header('Cache-Control: ' . $headers['cache-control']);
   echo implode("\n", $out);
   exit;
 }
 
-// Non-m3u8: passthrough (ts, mp4, images, etc.)
-$ct = $headers['content-type'] ?? 'application/octet-stream';
-header('Content-Type: ' . $ct);
+function passthrough_stream($url) {
+  $ch = make_curl($url);
+  if (!$ch) {
+    deny(500, 'cURL extension is not enabled on this server');
+  }
 
-// Forward helpful headers if present
-if (isset($headers['accept-ranges'])) header('Accept-Ranges: ' . $headers['accept-ranges']);
-if (isset($headers['content-range'])) header('Content-Range: ' . $headers['content-range']);
-if (isset($headers['content-length'])) header('Content-Length: ' . $headers['content-length']);
+  $state = array(
+    'status' => 200,
+    'headers' => array(),
+    'headers_sent' => false,
+  );
 
-echo $body;
+  curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $line) use (&$state) {
+    $trim = trim($line);
+
+    // New response block (redirect or final) => reset header map
+    if (starts_with($trim, 'HTTP/')) {
+      $state['headers'] = array();
+      $parts = explode(' ', $trim);
+      $state['status'] = isset($parts[1]) ? (int)$parts[1] : 200;
+      return strlen($line);
+    }
+
+    $pos = strpos($line, ':');
+    if ($pos !== false) {
+      $k = strtolower(trim(substr($line, 0, $pos)));
+      $v = trim(substr($line, $pos + 1));
+      if ($k !== '') $state['headers'][$k] = $v;
+    }
+    return strlen($line);
+  });
+
+  curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $chunk) use (&$state) {
+    if (!$state['headers_sent']) {
+      send_status($state['status']);
+
+      $h = $state['headers'];
+      if (isset($h['content-type'])) header('Content-Type: ' . $h['content-type']);
+      if (isset($h['accept-ranges'])) header('Accept-Ranges: ' . $h['accept-ranges']);
+      if (isset($h['content-range'])) header('Content-Range: ' . $h['content-range']);
+      if (isset($h['content-length'])) header('Content-Length: ' . $h['content-length']);
+      if (isset($h['cache-control'])) header('Cache-Control: ' . $h['cache-control']);
+      $state['headers_sent'] = true;
+    }
+
+    echo $chunk;
+    if (function_exists('flush')) flush();
+    return strlen($chunk);
+  });
+
+  curl_exec($ch);
+  if (curl_errno($ch)) {
+    $err = curl_error($ch);
+    if (!$state['headers_sent']) {
+      deny(502, $err);
+    }
+  }
+
+  curl_close($ch);
+}
+
+$url = isset($_GET['url']) ? trim($_GET['url']) : '';
+if ($url === '') deny(400, 'Missing ?url=');
+if (!preg_match('~^https?://~i', $url)) deny(400, 'Only http/https allowed');
+
+$parts = parse_url($url);
+$host = arr_get($parts, 'host', '');
+if ($host === '') deny(400, 'Invalid URL');
+
+// Block only local/private IP literals.
+if (filter_var($host, FILTER_VALIDATE_IP)) {
+  if (preg_match('~^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)~', $host)) {
+    deny(403, 'Blocked host');
+  }
+}
+
+if (should_rewrite_manifest($url)) {
+  rewrite_manifest_and_send($url);
+}
+
+passthrough_stream($url);
