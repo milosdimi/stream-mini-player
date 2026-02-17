@@ -1,5 +1,5 @@
 // app.js (final, online-ready - proxy only for playlists / manifests)
-const url = item.url; // KEIN Proxy für Playback
+const PROXY = "https://player.dimit.cc/proxy.php?url=";
 
 
 const LAST_M3U_KEY = "iptv_last_m3u_v1";
@@ -303,27 +303,19 @@ function playItem(item) {
   currentPlayingId = favId(item);
   filterAndRender();
 
-  if (nowPlayingEl) {
-    nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
-  }
+  if (nowPlayingEl) nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
 
-  if (hls) {
-    hls.destroy();
-    hls = null;
-  }
+  if (hls) { hls.destroy(); hls = null; }
 
-  const url = item.url; // 🔥 DIRECT STREAM URL
+  const url = item.url; // ✅ DIRECT, kein Proxy
 
-  if (url.includes(".m3u8")) {
+  if (url.toLowerCase().includes(".m3u8")) {
     if (window.Hls && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
+      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hls.loadSource(url);
       hls.attachMedia(videoEl);
       hls.on(Hls.Events.ERROR, (_, data) => {
-        showError(`HLS error: ${data.type} / ${data.details}`);
+        showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
       });
       videoEl.play().catch(() => { });
       return;
@@ -331,10 +323,9 @@ function playItem(item) {
   }
 
   videoEl.src = url;
-  videoEl.play().catch(err =>
-    showError(`Playback failed.\n${String(err)}`)
-  );
+  videoEl.play().catch(err => showError(`Playback failed.\n${String(err)}`));
 }
+
 
 
 // ---------- Utils ----------
