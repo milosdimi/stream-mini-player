@@ -1,7 +1,8 @@
-// app.js (final, clean - no EPG)
+// app.js (final, online-ready - proxy only for playlists / manifests)
 const PROXY = "https://player.dimit.cc/proxy.php?url=";
 
 const LAST_M3U_KEY = "iptv_last_m3u_v1";
+const FAV_KEY = "iptv_favs_v1";
 
 // Elements
 const loadingEl = document.getElementById("loading");
@@ -31,12 +32,10 @@ let focusedIndex = 0;
 let hls = null;
 let currentPlayingId = null;
 
-let currentType = "live"; // 'live' | 'movies' | 'series' | 'fav'
-let currentGroup = "";    // group-title filter
+let currentType = "live"; // live | movies | series | fav
+let currentGroup = "";
 let renderLimit = 400;
 
-// Favorites
-const FAV_KEY = "iptv_favs_v1";
 let favSet = new Set(loadFavs());
 
 // ---------- UI helpers ----------
@@ -50,7 +49,7 @@ function clearError() {
   errEl.style.display = "none";
   errEl.textContent = "";
 }
-function setLoading(isLoading, text = "Loading playlist…") {
+function setLoading(isLoading, text = "Loading…") {
   if (loadBtn) loadBtn.disabled = isLoading;
   if (demoBtn) demoBtn.disabled = isLoading;
 
@@ -67,41 +66,6 @@ function saveLastM3U(url) {
 }
 function loadLastM3U() {
   try { return localStorage.getItem(LAST_M3U_KEY) || ""; } catch { return ""; }
-}
-
-// ---------- Tabs / Groups ----------
-function setActiveTab(type) {
-  currentType = type;
-
-  // Grid OFF (you preferred list view)
-  if (listEl) listEl.classList.remove("grid");
-
-  if (tabLiveEl) tabLiveEl.classList.toggle("active", type === "live");
-  if (tabMoviesEl) tabMoviesEl.classList.toggle("active", type === "movies");
-  if (tabSeriesEl) tabSeriesEl.classList.toggle("active", type === "series");
-  if (tabFavEl) tabFavEl.classList.toggle("active", type === "fav");
-
-  currentGroup = "";
-  if (groupSelectEl) groupSelectEl.value = "";
-  renderLimit = 400;
-  focusedIndex = 0;
-
-  fillGroupDropdown(getBaseItemsByType());
-  filterAndRender();
-}
-
-function fillGroupDropdown(items) {
-  if (!groupSelectEl) return;
-
-  const groups = new Set();
-  for (const it of items) {
-    if (it.group) groups.add(it.group);
-  }
-
-  const sorted = [...groups].sort((a, b) => a.localeCompare(b));
-  groupSelectEl.innerHTML =
-    `<option value="">All groups</option>` +
-    sorted.map(g => `<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join("");
 }
 
 // ---------- Favorites ----------
@@ -131,6 +95,37 @@ function toggleFav(item) {
 
   saveFavs();
   filterAndRender();
+}
+
+// ---------- Tabs / Groups ----------
+function setActiveTab(type) {
+  currentType = type;
+  if (listEl) listEl.classList.remove("grid");
+
+  if (tabLiveEl) tabLiveEl.classList.toggle("active", type === "live");
+  if (tabMoviesEl) tabMoviesEl.classList.toggle("active", type === "movies");
+  if (tabSeriesEl) tabSeriesEl.classList.toggle("active", type === "series");
+  if (tabFavEl) tabFavEl.classList.toggle("active", type === "fav");
+
+  currentGroup = "";
+  if (groupSelectEl) groupSelectEl.value = "";
+  renderLimit = 400;
+  focusedIndex = 0;
+
+  fillGroupDropdown(getBaseItemsByType());
+  filterAndRender();
+}
+
+function fillGroupDropdown(items) {
+  if (!groupSelectEl) return;
+
+  const groups = new Set();
+  for (const it of items) if (it.group) groups.add(it.group);
+
+  const sorted = [...groups].sort((a, b) => a.localeCompare(b));
+  groupSelectEl.innerHTML =
+    `<option value="">All groups</option>` +
+    sorted.map(g => `<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join("");
 }
 
 // ---------- M3U parser ----------
@@ -165,12 +160,11 @@ function parseM3U(text) {
   return items;
 }
 
-// ---------- Filtering / view ----------
+// ---------- Filtering ----------
 function getBaseItemsByType() {
   if (currentType === "live") return liveItems;
   if (currentType === "movies") return movieItems;
   if (currentType === "series") return seriesItems;
-
   if (currentType === "fav") {
     const all = [...liveItems, ...movieItems, ...seriesItems];
     return all.filter(isFav);
@@ -180,7 +174,6 @@ function getBaseItemsByType() {
 
 function getViewItems() {
   let items = getBaseItemsByType();
-
   if (currentGroup) items = items.filter(it => (it.group || "") === currentGroup);
 
   const q = (searchEl?.value || "").toLowerCase().trim();
@@ -214,10 +207,9 @@ function renderList(items) {
     div.dataset.index = String(idx);
 
     const starred = isFav(it);
-
     const logoHtml = it.logo
       ? `<img class="logo" src="${escapeAttr(it.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer"
-             onerror="this.style.display='none'">`
+           onerror="this.style.display='none'">`
       : "";
 
     div.innerHTML = `
@@ -228,7 +220,6 @@ function renderList(items) {
             <button class="favBtn" type="button" title="Favorite">${starred ? "★" : "☆"}</button>
             <div class="titleText">${escapeHtml(it.name || "Unnamed")}</div>
           </div>
-
           <div class="meta">
             ${it.group ? `<span>📁 ${escapeHtml(it.group)}</span>` : ""}
           </div>
@@ -295,32 +286,47 @@ function stopPlayback() {
   videoEl.load();
 }
 
+// IMPORTANT: proxy only for playlist & manifest, NOT for video segments
+function proxifyIfNeeded(url) {
+  // Proxy only for text playlists/manifests (CORS), not for media segments
+  if (/\.(m3u8|m3u)(\?|$)/i.test(url)) {
+    return PROXY + encodeURIComponent(url);
+  }
+  return url;
+}
+
 function playItem(item) {
   clearError();
-  if (!item) return;
+  if (!item || !videoEl) return;
 
   currentPlayingId = favId(item);
   filterAndRender();
 
   if (nowPlayingEl) nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
-  const url = PROXY + encodeURIComponent(item.url);
 
   if (hls) { hls.destroy(); hls = null; }
 
-  if (url.toLowerCase().includes(".m3u8")) {
-    if (window.Hls && Hls.isSupported()) {
-      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hls.loadSource(url);
-      hls.attachMedia(videoEl);
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
-      });
-      videoEl.play().catch(() => {});
-      return;
-    }
+  const rawUrl = item.url;
+  const isM3U8 = /\.(m3u8)(\?|$)/i.test(rawUrl);
+
+  if (isM3U8 && window.Hls && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+
+    // Only manifest proxied
+    const manifestUrl = proxifyIfNeeded(rawUrl);
+    hls.loadSource(manifestUrl);
+    hls.attachMedia(videoEl);
+
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      showError(`HLS error: ${data.type} / ${data.details}\n${data.reason || ""}`.trim());
+    });
+
+    videoEl.play().catch(() => {});
+    return;
   }
 
-  videoEl.src = url;
+  // fallback (mp4, etc.) — try direct first, proxy only if it's a playlist
+  videoEl.src = proxifyIfNeeded(rawUrl);
   videoEl.play().catch(err => showError(`Playback failed.\n${String(err)}`));
 }
 
@@ -337,15 +343,13 @@ function escapeAttr(s) {
 // ---------- Load M3U ----------
 async function loadM3U(url) {
   clearError();
-  if (!url) {
-    showError("Bitte M3U URL eingeben.");
-    return;
-  }
+  if (!url) return showError("Bitte M3U URL eingeben.");
 
   saveLastM3U(url);
   setLoading(true, "Loading playlist…");
 
   try {
+    // Playlist always via proxy (CORS)
     const finalUrl = PROXY + encodeURIComponent(url);
     const res = await fetch(finalUrl, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -413,7 +417,7 @@ if (tabMoviesEl) tabMoviesEl.addEventListener("click", () => setActiveTab("movie
 if (tabSeriesEl) tabSeriesEl.addEventListener("click", () => setActiveTab("series"));
 if (tabFavEl) tabFavEl.addEventListener("click", () => setActiveTab("fav"));
 
-// Keyboard navigation (Remote-like) — but NOT while typing in inputs
+// Keyboard navigation — NOT while typing
 document.addEventListener("keydown", (e) => {
   const tag = e.target?.tagName;
   const isTyping = tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable;
