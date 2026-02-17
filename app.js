@@ -303,7 +303,7 @@ function playItem(item) {
   filterAndRender();
 
   if (nowPlayingEl) nowPlayingEl.textContent = `Playing: ${item.name || item.url}`;
-  const url = item.url || "";
+  const url = PROXY + encodeURIComponent(item.url);
 
   if (hls) { hls.destroy(); hls = null; }
 
